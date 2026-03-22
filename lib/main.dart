@@ -5,7 +5,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import 'data/cards.dart';
 import 'models/outfit_card.dart';
@@ -247,11 +246,6 @@ class _GateScreenState extends State<GateScreen> {
     }
   }
 
-  Future<void> _openCheckout() async {
-    final uri = Uri.parse(kStripePaymentUrl);
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-
   @override
   Widget build(BuildContext context) {
     switch (_state) {
@@ -263,17 +257,14 @@ class _GateScreenState extends State<GateScreen> {
         return const HomeScreen();
       case _GateState.notPaid:
         return StartScreen(
-          onBuy: _openCheckout,
           title: 'Outfit Personality',
-          subtitle:
-              'Buy 3-day access and start playing instantly after payment.',
+          subtitle: 'Buy 3-day access and start playing instantly after payment.',
           buttonText: 'Buy 3-day access ✨',
         );
       case _GateState.expired:
-        return ExpiredScreen(onBuyAgain: _openCheckout);
+        return const ExpiredScreen();
       case _GateState.error:
         return StartScreen(
-          onBuy: _openCheckout,
           title: 'Access issue',
           subtitle: _message,
           buttonText: 'Try payment link again',
@@ -283,14 +274,12 @@ class _GateScreenState extends State<GateScreen> {
 }
 
 class StartScreen extends StatelessWidget {
-  final VoidCallback onBuy;
   final String title;
   final String subtitle;
   final String buttonText;
 
   const StartScreen({
     super.key,
-    required this.onBuy,
     required this.title,
     required this.subtitle,
     required this.buttonText,
@@ -298,8 +287,6 @@ class StartScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -337,7 +324,6 @@ class StartScreen extends StatelessWidget {
                       const SizedBox(height: 8),
                       const _Bullet("Access starts automatically after payment."),
                       const _Bullet("Each purchase unlocks 3 days of play."),
-                      const _Bullet("If someone buys again later, they get a fresh 3-day access period."),
                       const SizedBox(height: 14),
                       Text(
                         "How to play",
@@ -360,26 +346,11 @@ class StartScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-                _GlassCard(
-                  child: Row(
-                    children: [
-                      Icon(Icons.schedule_rounded, color: cs.primary),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          "One payment = 3 days of access on this browser/device.",
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 const SizedBox(height: 18),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: onBuy,
+                    onPressed: () {},
                     child: Text(buttonText),
                   ),
                 ),
@@ -394,7 +365,7 @@ class StartScreen extends StatelessWidget {
 
 class _Bullet extends StatelessWidget {
   final String text;
-  const _Bullet(this.text);
+  const _Bullet(this.text, {super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -417,9 +388,7 @@ class _Bullet extends StatelessWidget {
 }
 
 class ExpiredScreen extends StatelessWidget {
-  final VoidCallback onBuyAgain;
-
-  const ExpiredScreen({super.key, required this.onBuyAgain});
+  const ExpiredScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -440,22 +409,15 @@ class ExpiredScreen extends StatelessWidget {
                       Icon(Icons.lock_rounded, size: 42, color: cs.primary),
                       const SizedBox(height: 12),
                       Text(
-                        "Access expired",
+                        "Galiojimo laikas baigėsi",
                         style: Theme.of(context).textTheme.headlineSmall,
+                        textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        "Your 3-day access window has ended.\n\nBuy again to unlock a fresh 3-day period.",
+                        "Jei norite atnaujinti prieigą, parašykite:\ninfo@bridehunt.eu",
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          onPressed: onBuyAgain,
-                          child: const Text("Buy again ✨"),
-                        ),
                       ),
                     ],
                   ),
@@ -544,8 +506,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required Rect from,
     required Rect to,
     required int seed,
-    BorderRadius borderRadius =
-        const BorderRadius.all(Radius.circular(18)),
+    BorderRadius borderRadius = const BorderRadius.all(Radius.circular(18)),
     Duration duration = const Duration(milliseconds: 650),
   }) async {
     final overlay = Overlay.of(context);
@@ -840,8 +801,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: GridView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                     itemCount: cards.length,
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 3,
                       mainAxisSpacing: 14,
                       crossAxisSpacing: 14,
