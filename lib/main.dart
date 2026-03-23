@@ -1,20 +1,19 @@
-import 'dart:convert';
 import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/cards.dart';
 import 'models/outfit_card.dart';
 
-const String kStripePaymentUrl = 'https://buy.stripe.com/test_4gM9AVegp1i821RdNC6sw00';
-
-/// Keep this private.
-/// Example owner link:
+/// Private owner/dev bypass.
+/// Example:
 /// https://your-site.netlify.app/?owner=1
 const String kOwnerBypassValue = '1';
+
+/// Each shared game link should work for 7 days from first open on that browser/device.
+const Duration kAccessDuration = Duration(days: 7);
 
 void main() => runApp(const OutfitGameApp());
 
@@ -69,97 +68,52 @@ class OutfitGameApp extends StatelessWidget {
 }
 
 class AccessSession {
-  final String token;
+  final DateTime startedAt;
   final DateTime expiresAt;
 
   const AccessSession({
-    required this.token,
+    required this.startedAt,
     required this.expiresAt,
   });
 }
 
 class AccessService {
-  static const _tokenKey = 'paid_access_token';
-  static const _expiryKey = 'paid_access_expiry_ms';
-
-  static Uri _functionUri(String name, [Map<String, String>? query]) {
-    return Uri(
-      path: '/.netlify/functions/$name',
-      queryParameters: query,
-    );
-  }
+  static const _startedAtKey = 'link_access_started_at_ms';
+  static const _expiresAtKey = 'link_access_expires_at_ms';
 
   static bool get isOwnerBypass {
     return Uri.base.queryParameters['owner'] == kOwnerBypassValue;
   }
 
-  static String? get sessionIdFromUrl {
-    final value = Uri.base.queryParameters['session_id'];
-    if (value == null || value.trim().isEmpty) return null;
-    return value.trim();
-  }
+  static Future<AccessSession> createOrGetSession() async {
+    final prefs = await SharedPreferences.getInstance();
 
-  static Future<AccessSession?> redeemCheckoutSession(String sessionId) async {
-    try {
-      final res = await http.get(
-        _functionUri('redeem-session', {'session_id': sessionId}),
-      );
+    final startedAtMs = prefs.getInt(_startedAtKey);
+    final expiresAtMs = prefs.getInt(_expiresAtKey);
 
-      if (res.statusCode != 200) return null;
-
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final token = (data['token'] ?? '').toString();
-      final expiresAtRaw = (data['expiresAt'] ?? '').toString();
-
-      if (token.isEmpty || expiresAtRaw.isEmpty) return null;
-
+    if (startedAtMs != null && expiresAtMs != null) {
       return AccessSession(
-        token: token,
-        expiresAt: DateTime.parse(expiresAtRaw).toUtc(),
+        startedAt: DateTime.fromMillisecondsSinceEpoch(startedAtMs, isUtc: true),
+        expiresAt: DateTime.fromMillisecondsSinceEpoch(expiresAtMs, isUtc: true),
       );
-    } catch (_) {
-      return null;
     }
-  }
 
-  static Future<bool> validateToken(String token) async {
-    try {
-      final res = await http.get(
-        _functionUri('validate-access', {'token': token}),
-      );
+    final now = DateTime.now().toUtc();
+    final expiresAt = now.add(kAccessDuration);
 
-      if (res.statusCode != 200) return false;
-
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      return data['active'] == true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<void> cacheSession(AccessSession session) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenKey, session.token);
-    await prefs.setInt(_expiryKey, session.expiresAt.millisecondsSinceEpoch);
-  }
-
-  static Future<AccessSession?> getCachedSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString(_tokenKey);
-    final expiryMs = prefs.getInt(_expiryKey);
-
-    if (token == null || token.isEmpty || expiryMs == null) return null;
+    await prefs.setInt(_startedAtKey, now.millisecondsSinceEpoch);
+    await prefs.setInt(_expiresAtKey, expiresAt.millisecondsSinceEpoch);
 
     return AccessSession(
-      token: token,
-      expiresAt: DateTime.fromMillisecondsSinceEpoch(expiryMs, isUtc: true),
+      startedAt: now,
+      expiresAt: expiresAt,
     );
   }
 
-  static Future<void> clearCachedSession() async {
+  static Future<void> clearSession() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tokenKey);
-    await prefs.remove(_expiryKey);
+    await prefs.remove(_startedAtKey);
+    await prefs.remove(_expiresAtKey);
   }
 }
 
@@ -175,7 +129,7 @@ class GateScreen extends StatefulWidget {
 
 enum _GateState {
   loading,
-  notPaid,
+  entrance,
   active,
   expired,
   error,
@@ -184,6 +138,7 @@ enum _GateState {
 class _GateScreenState extends State<GateScreen> {
   _GateState _state = _GateState.loading;
   String _message = '';
+  AccessSession? _session;
 
   @override
   void initState() {
@@ -197,53 +152,40 @@ class _GateScreenState extends State<GateScreen> {
       _message = '';
     });
 
-    if (AccessService.isOwnerBypass) {
-      if (!mounted) return;
-      setState(() => _state = _GateState.active);
-      return;
-    }
-
-    final sessionId = AccessService.sessionIdFromUrl;
-    if (sessionId != null) {
-      final redeemed = await AccessService.redeemCheckoutSession(sessionId);
-      if (redeemed != null) {
-        await AccessService.cacheSession(redeemed);
+    try {
+      if (AccessService.isOwnerBypass) {
         if (!mounted) return;
         setState(() => _state = _GateState.active);
         return;
-      } else {
+      }
+
+      final session = await AccessService.createOrGetSession();
+
+      if (DateTime.now().toUtc().isAfter(session.expiresAt)) {
         if (!mounted) return;
         setState(() {
-          _state = _GateState.error;
-          _message = 'Payment was detected, but access could not be activated.';
+          _session = session;
+          _state = _GateState.expired;
         });
         return;
       }
-    }
 
-    final cached = await AccessService.getCachedSession();
-    if (cached == null) {
       if (!mounted) return;
-      setState(() => _state = _GateState.notPaid);
-      return;
+      setState(() {
+        _session = session;
+        _state = _GateState.entrance;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _state = _GateState.error;
+        _message = 'Something went wrong while loading access.';
+      });
     }
+  }
 
-    if (DateTime.now().toUtc().isAfter(cached.expiresAt)) {
-      await AccessService.clearCachedSession();
-      if (!mounted) return;
-      setState(() => _state = _GateState.expired);
-      return;
-    }
-
-    final valid = await AccessService.validateToken(cached.token);
-    if (valid) {
-      if (!mounted) return;
-      setState(() => _state = _GateState.active);
-    } else {
-      await AccessService.clearCachedSession();
-      if (!mounted) return;
-      setState(() => _state = _GateState.expired);
-    }
+  void _enterGame() {
+    setState(() => _state = _GateState.active);
   }
 
   @override
@@ -253,33 +195,38 @@ class _GateScreenState extends State<GateScreen> {
         return const Scaffold(
           body: Center(child: CircularProgressIndicator()),
         );
+      case _GateState.entrance:
+        return StartScreen(
+          onEnter: _enterGame,
+          title: 'Outfit Personality',
+          subtitle:
+              'This shared game link is valid for 7 days from the first time it is opened.',
+          buttonText: 'Enter game ✨',
+        );
       case _GateState.active:
         return const HomeScreen();
-      case _GateState.notPaid:
-        return StartScreen(
-          title: 'Outfit Personality',
-          subtitle: 'Buy 3-day access and start playing instantly after payment.',
-          buttonText: 'Buy 3-day access ✨',
-        );
       case _GateState.expired:
         return const ExpiredScreen();
       case _GateState.error:
         return StartScreen(
+          onEnter: _bootstrap,
           title: 'Access issue',
           subtitle: _message,
-          buttonText: 'Try payment link again',
+          buttonText: 'Try again',
         );
     }
   }
 }
 
 class StartScreen extends StatelessWidget {
+  final VoidCallback onEnter;
   final String title;
   final String subtitle;
   final String buttonText;
 
   const StartScreen({
     super.key,
+    required this.onEnter,
     required this.title,
     required this.subtitle,
     required this.buttonText,
@@ -287,6 +234,8 @@ class StartScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -322,8 +271,15 @@ class StartScreen extends StatelessWidget {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
-                      const _Bullet("Access starts automatically after payment."),
-                      const _Bullet("Each purchase unlocks 3 days of play."),
+                      const _Bullet(
+                        "This shared game link becomes active the first time it is opened.",
+                      ),
+                      const _Bullet(
+                        "Each link is valid for 7 days on that browser/device.",
+                      ),
+                      const _Bullet(
+                        "After the 7-day period ends, the game is no longer available through this link.",
+                      ),
                       const SizedBox(height: 14),
                       Text(
                         "How to play",
@@ -346,11 +302,26 @@ class StartScreen extends StatelessWidget {
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                _GlassCard(
+                  child: Row(
+                    children: [
+                      Icon(Icons.schedule_rounded, color: cs.primary),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          "This link includes 7 days of access. No purchase is required here.",
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 18),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: () {},
+                    onPressed: onEnter,
                     child: Text(buttonText),
                   ),
                 ),
@@ -409,13 +380,13 @@ class ExpiredScreen extends StatelessWidget {
                       Icon(Icons.lock_rounded, size: 42, color: cs.primary),
                       const SizedBox(height: 12),
                       Text(
-                        "Galiojimo laikas baigėsi",
+                        "This game link has expired",
                         style: Theme.of(context).textTheme.headlineSmall,
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        "Jei norite atnaujinti prieigą, parašykite:\ninfo@bridehunt.eu",
+                        "The 7-day access period for this game has ended.\n\nIf you would like to purchase access again, please visit:\nwww.bridehunt.eu",
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
@@ -506,7 +477,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required Rect from,
     required Rect to,
     required int seed,
-    BorderRadius borderRadius = const BorderRadius.all(Radius.circular(18)),
+    BorderRadius borderRadius =
+        const BorderRadius.all(Radius.circular(18)),
     Duration duration = const Duration(milliseconds: 650),
   }) async {
     final overlay = Overlay.of(context);
@@ -720,7 +692,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         Expanded(
                           child: Text(
                             "Pick three cards.\nTap a selected card again to remove it.",
-                            style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium!
+                                .copyWith(
                                   color: Theme.of(context)
                                       .colorScheme
                                       .onSurface
@@ -801,7 +776,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: GridView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                     itemCount: cards.length,
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 3,
                       mainAxisSpacing: 14,
                       crossAxisSpacing: 14,
@@ -812,7 +788,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       final isSelected = selected.contains(card);
 
                       return GestureDetector(
-                        onTap: _animating ? null : () => _handleGridCardTap(card),
+                        onTap:
+                            _animating ? null : () => _handleGridCardTap(card),
                         child: AnimatedOpacity(
                           duration: const Duration(milliseconds: 180),
                           opacity: isSelected ? 0.28 : 1,
