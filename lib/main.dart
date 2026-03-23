@@ -12,7 +12,7 @@ import 'models/outfit_card.dart';
 /// https://your-site.netlify.app/?owner=1
 const String kOwnerBypassValue = '1';
 
-/// Each shared game link should work for 7 days from first open on that browser/device.
+/// Each shared game link works for 7 days from first open on that browser/device.
 const Duration kAccessDuration = Duration(days: 7);
 
 void main() => runApp(const OutfitGameApp());
@@ -93,8 +93,14 @@ class AccessService {
 
     if (startedAtMs != null && expiresAtMs != null) {
       return AccessSession(
-        startedAt: DateTime.fromMillisecondsSinceEpoch(startedAtMs, isUtc: true),
-        expiresAt: DateTime.fromMillisecondsSinceEpoch(expiresAtMs, isUtc: true),
+        startedAt: DateTime.fromMillisecondsSinceEpoch(
+          startedAtMs,
+          isUtc: true,
+        ),
+        expiresAt: DateTime.fromMillisecondsSinceEpoch(
+          expiresAtMs,
+          isUtc: true,
+        ),
       );
     }
 
@@ -138,7 +144,6 @@ enum _GateState {
 class _GateScreenState extends State<GateScreen> {
   _GateState _state = _GateState.loading;
   String _message = '';
-  AccessSession? _session;
 
   @override
   void initState() {
@@ -163,18 +168,12 @@ class _GateScreenState extends State<GateScreen> {
 
       if (DateTime.now().toUtc().isAfter(session.expiresAt)) {
         if (!mounted) return;
-        setState(() {
-          _session = session;
-          _state = _GateState.expired;
-        });
+        setState(() => _state = _GateState.expired);
         return;
       }
 
       if (!mounted) return;
-      setState(() {
-        _session = session;
-        _state = _GateState.entrance;
-      });
+      setState(() => _state = _GateState.entrance);
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -336,6 +335,7 @@ class StartScreen extends StatelessWidget {
 
 class _Bullet extends StatelessWidget {
   final String text;
+
   const _Bullet(this.text, {super.key});
 
   @override
@@ -830,101 +830,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 }
 
 /// --------------------
-/// LONGER RESULT
+/// RESULT
 /// --------------------
 class ResultScreen extends StatelessWidget {
   final List<OutfitCard> picked;
 
   const ResultScreen({super.key, required this.picked});
 
-  String _firstSentence(String text) {
-    final t = text.trim();
-    if (t.isEmpty) return "";
-    final idx = t.indexOf('.');
-    if (idx == -1) return t;
-    return t.substring(0, idx + 1).trim();
-  }
+  String buildStructuredSummary() {
+    final buffer = StringBuffer();
 
-  List<String> _traitsFromFirstSentence(String sentence) {
-    var s = sentence.trim();
-    s = s.replaceFirst(RegExp(r'^You are\s+', caseSensitive: false), '');
-    s = s.replaceAll('.', '').trim();
+    buffer.writeln(
+      "You picked three outfits. Each one represents a different side of your style:",
+    );
+    buffer.writeln();
 
-    return s
-        .split(',')
-        .expand((p) => p.split(RegExp(r'\s+and\s+', caseSensitive: false)))
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-  }
+    for (int i = 0; i < picked.length; i++) {
+      final card = picked[i];
+      final number = i + 1;
 
-  String _pickToneLine(List<String> traitsLower) {
-    if (traitsLower.any(
-      (t) => t.contains('command') ||
-          t.contains('authorit') ||
-          t.contains('decis'),
-    )) {
-      return "You walk in like a headline — and somehow the room agrees.";
-    }
-    if (traitsLower.any(
-      (t) => t.contains('romantic') ||
-          t.contains('luminous') ||
-          t.contains('gentle'),
-    )) {
-      return "You don’t chase attention — you *attract* it.";
-    }
-    if (traitsLower.any(
-      (t) => t.contains('playful') ||
-          t.contains('upbeat') ||
-          t.contains('energetic'),
-    )) {
-      return "Your vibe says: fun first, overthinking never.";
-    }
-    return "You make good taste look effortless — which is honestly unfair.";
-  }
-
-  String buildLongSummary() {
-    final titles = picked.map((c) => c.title).toList();
-
-    final traits = <String>[];
-    for (final c in picked) {
-      traits.addAll(_traitsFromFirstSentence(_firstSentence(c.description)));
+      buffer.writeln("$number. ${card.title}");
+      buffer.writeln();
+      buffer.writeln(card.description.trim());
+      buffer.writeln();
     }
 
-    final seen = <String>{};
-    final uniqueTraits = <String>[];
-    for (final t in traits) {
-      final k = t.toLowerCase();
-      if (seen.add(k)) uniqueTraits.add(t);
-    }
-
-    final traitsLower = uniqueTraits.map((e) => e.toLowerCase()).toList();
-
-    final headline =
-        "Your style signature blends ${titles[0]}, ${titles[1]}, and ${titles[2]}.";
-
-    final core = uniqueTraits.isEmpty
-        ? "At your core, you’re a rare mix of taste and personality — the kind that doesn’t need validation to feel certain."
-        : "At your core, you’re ${uniqueTraits.take(3).join(', ')} — with a calm confidence that reads as ‘intentional’ in every room you enter.";
-
-    final social =
-        "Socially, you move with purpose. You know when to be warm, when to be sharp, and when to simply let the outfit do the talking. People feel your presence before you even speak — in the best way.";
-
-    final relationships =
-        "In friendships (and flirtation), you’re the one who sets the tone: you elevate plans, you notice details, and you bring a polished energy that makes everything feel curated — even if it was spontaneous.";
-
-    final bullets = uniqueTraits.isEmpty
-        ? "• Signature trait: effortlessly memorable\n• Strength: tasteful confidence\n• Hidden talent: setting the vibe"
-        : "• Signature traits: ${uniqueTraits.take(2).join(' + ')}\n• Strength: ${uniqueTraits.length >= 3 ? uniqueTraits[2] : uniqueTraits.first}\n• Bonus power: main-character energy (quietly).";
-
-    final finish = _pickToneLine(traitsLower);
-
-    return "$headline\n\n$core\n\n$social\n\n$relationships\n\n$bullets\n\n$finish";
+    return buffer.toString().trim();
   }
 
   @override
   Widget build(BuildContext context) {
-    final summary = buildLongSummary();
+    final summary = buildStructuredSummary();
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -964,7 +900,7 @@ class ResultScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        "Your vibe",
+                        "Your selected outfits",
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
